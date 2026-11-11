@@ -1,0 +1,92 @@
+from fastapi import FastAPI, HTTPException
+from database import get_db_connection, criar_tabelas
+from models import RegistroBase, RegistroResponse
+
+app = FastAPI(
+    title="API de Gerenciamento - Projeto A4",
+    description="Template inicial integrando FastAPI, SQLite e validações Pydantic.",
+    version="1.0.0"
+)
+@app.on_event("startup")
+def startup_event():
+    criar_tabelas()
+
+@app.post("/registros", response_model=RegistroResponse, status_code=201)
+def criar_registro(registro: RegistroBase):
+    # Requisito 5: Código 400 (Bad Request) para regra de negócio inválida
+    if not registro.titulo.strip():
+        raise HTTPException(status_code=400, detail="O título não pode estar em branco.")
+
+    try:
+        conn = get_db_connection()
+        cursor = conn.cursor()
+        cursor.execute(
+            "INSERT INTO registros (titulo, descricao, ativo) VALUES (?, ?, ?)",
+            (registro.titulo, registro.descricao, registro.ativo)
+        )
+        conn.commit()
+        novo_id = cursor.lastrowid
+        conn.close()
+
+        return {**registro.model_dump(), "id": novo_id}
+    except Exception as e:
+        # Requisito 5: Código 500 (Internal Server Error)
+        raise HTTPException(status_code=500, detail=f"Erro interno no banco de dados: {str(e)}")
+
+
+@app.get("/registros", response_model=list[RegistroResponse], status_code=200)
+def listar_registros():
+    conn = get_db_connection()
+    registros = conn.execute("SELECT * FROM registros").fetchall()
+    conn.close()
+    return [dict(reg) for reg in registros]
+
+
+@app.get("/registros/{registro_id}", response_model=RegistroResponse, status_code=200)
+def buscar_registro(registro_id: int):
+    conn = get_db_connection()
+    registro = conn.execute("SELECT * FROM registros WHERE id = ?", (registro_id,)).fetchone()
+    conn.close()
+
+    if registro is None:
+        # Requisito 5: Código 404 (Not Found)
+        raise HTTPException(status_code=404, detail="Registro não encontrado.")
+
+    return dict(registro)
+
+
+@app.put("/registros/{registro_id}", response_model=RegistroResponse, status_code=200)
+def atualizar_registro(registro_id: int, registro: RegistroBase):
+    conn = get_db_connection()
+    existente = conn.execute("SELECT * FROM registros WHERE id = ?", (registro_id,)).fetchone()
+
+    if existente is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Registro não encontrado para atualização.")
+
+    try:
+        conn.execute(
+            "UPDATE registros SET titulo = ?, descricao = ?, ativo = ? WHERE id = ?",
+            (registro.titulo, registro.descricao, registro.ativo, registro_id)
+        )
+        conn.commit()
+        conn.close()
+        return {**registro.model_dump(), "id": registro_id}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Erro interno: {str(e)}")
+
+
+@app.delete("/registros/{registro_id}", status_code=200)
+def deletar_registro(registro_id: int):
+    conn = get_db_connection()
+    existente = conn.execute("SELECT * FROM registros WHERE id = ?", (registro_id,)).fetchone()
+
+    if existente is None:
+        conn.close()
+        raise HTTPException(status_code=404, detail="Registro não encontrado para exclusão.")
+
+    conn.execute("DELETE FROM registros WHERE id = ?", (registro_id,))
+    conn.commit()
+    conn.close()
+
+    return {"mensagem": "Registro removido com sucesso."}
